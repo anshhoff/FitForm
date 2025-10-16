@@ -6,13 +6,35 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A609F7FB2EA121520024BF24 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A609F7FA2EA121510024BF24 /* AVFoundation.framework */; };
+		A609F7FD2EA1215A0024BF24 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A609F7FC2EA1215A0024BF24 /* Vision.framework */; };
+		A609F7FF2EA121670024BF24 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A609F7FE2EA121670024BF24 /* CoreML.framework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		A609F7FA2EA121510024BF24 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		A609F7FC2EA1215A0024BF24 /* Vision.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Vision.framework; path = System/Library/Frameworks/Vision.framework; sourceTree = SDKROOT; };
+		A609F7FE2EA121670024BF24 /* CoreML.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreML.framework; path = System/Library/Frameworks/CoreML.framework; sourceTree = SDKROOT; };
 		A664BB722EA0D44D0073297C /* FitForm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FitForm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		A609F7F42EA1206D0024BF24 /* Exceptions for "FitForm" folder in "FitForm" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = A664BB712EA0D44D0073297C /* FitForm */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A664BB742EA0D44D0073297C /* FitForm */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				A609F7F42EA1206D0024BF24 /* Exceptions for "FitForm" folder in "FitForm" target */,
+			);
 			path = FitForm;
 			sourceTree = "<group>";
 		};
@@ -23,16 +45,30 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A609F7FD2EA1215A0024BF24 /* Vision.framework in Frameworks */,
+				A609F7FB2EA121520024BF24 /* AVFoundation.framework in Frameworks */,
+				A609F7FF2EA121670024BF24 /* CoreML.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		A609F7F92EA121510024BF24 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A609F7FE2EA121670024BF24 /* CoreML.framework */,
+				A609F7FC2EA1215A0024BF24 /* Vision.framework */,
+				A609F7FA2EA121510024BF24 /* AVFoundation.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		A664BB692EA0D44D0073297C = {
 			isa = PBXGroup;
 			children = (
 				A664BB742EA0D44D0073297C /* FitForm */,
+				A609F7F92EA121510024BF24 /* Frameworks */,
 				A664BB732EA0D44D0073297C /* Products */,
 			);
 			sourceTree = "<group>";
@@ -256,6 +292,9 @@
 				DEVELOPMENT_TEAM = P4822XB343;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FitForm/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to track your workout form.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "We need motion to analyze your movements.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -288,6 +327,9 @@
 				DEVELOPMENT_TEAM = P4822XB343;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FitForm/Info.plist;
+				INFOPLIST_KEY_NSCameraUsageDescription = "We need camera access to track your workout form.";
+				INFOPLIST_KEY_NSMotionUsageDescription = "We need motion to analyze your movements.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
