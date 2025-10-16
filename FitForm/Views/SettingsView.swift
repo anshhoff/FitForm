@@ -18,6 +18,7 @@ struct SettingsView: View {
     @Binding var isSkeletonOverlayEnabled: Bool
     @Binding var isHapticsEnabled: Bool
     @Binding var isSoundEnabled: Bool
+    @Binding var isMinimalUIMode: Bool
     
     var body: some View {
         NavigationView {
@@ -37,6 +38,9 @@ struct SettingsView: View {
                 Section(header: Label("Overlay", systemImage: "viewfinder")) {
                     Toggle(isOn: $isSkeletonOverlayEnabled) {
                         Label("Skeleton Overlay", systemImage: "figure.walk")
+                    }
+                    Toggle(isOn: $isMinimalUIMode) {
+                        Label("Minimal UI Mode", systemImage: "rectangle.dashed")
                     }
                 }
             }
@@ -58,12 +62,14 @@ struct SettingsView_Previews: PreviewProvider {
     @State static var overlay = true
     @State static var haptics = true
     @State static var sound = true
+    @State static var minimal = false
     static var previews: some View {
         SettingsView(
             isSpeechEnabled: $speech,
             isSkeletonOverlayEnabled: $overlay,
             isHapticsEnabled: $haptics,
-            isSoundEnabled: $sound
+            isSoundEnabled: $sound,
+            isMinimalUIMode: $minimal
         )
     }
 }

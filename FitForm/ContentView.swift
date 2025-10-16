@@ -28,6 +28,12 @@ struct ContentView: View {
     @State private var showGreenGlow = false
     @State private var workoutStartTime: Date? = nil
     @State private var distanceUIHiddenAfterOptimal: Bool = false
+    @State private var showFeedbackBanner: Bool = false
+    @State private var pendingFeedbackHideWorkItem: DispatchWorkItem? = nil
+    @State private var uiOpacity: Double = 1.0
+    @State private var uiFadeTimer: Timer? = nil
+    @State private var uiRestoreTimer: Timer? = nil
+    @State private var distanceOptimalStartTime: Date? = nil
     
     /// Visual alert overlay state
     @State private var showPostureAlert = false
@@ -82,9 +88,13 @@ struct ContentView: View {
             if active {
                 workoutStartTime = Date()
                 distanceUIHiddenAfterOptimal = false
+                scheduleUIFade(after: 15)
             } else {
                 workoutStartTime = nil
                 distanceUIHiddenAfterOptimal = false
+                uiFadeTimer?.invalidate(); uiFadeTimer = nil
+                uiRestoreTimer?.invalidate(); uiRestoreTimer = nil
+                withAnimation(.easeInOut(duration: 0.25)) { uiOpacity = 1.0 }
             }
         }
         .animation(.easeInOut(duration: 0.3), value: isUIVisible)
@@ -100,11 +110,26 @@ struct ContentView: View {
             // Hide distance UI after first 10s once optimal is achieved
             if optimal, !distanceUIHiddenAfterOptimal {
                 if let start = workoutStartTime, Date().timeIntervalSince(start) >= 10 {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        distanceUIHiddenAfterOptimal = true
+                    distanceOptimalStartTime = Date()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                        if workoutViewModel.isOptimalDistance {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                distanceUIHiddenAfterOptimal = true
+                            }
+                        }
                     }
                 }
             }
+        }
+        .onChange(of: workoutViewModel.feedbackMessage) { _, newMsg in
+            guard !newMsg.isEmpty else { return }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { showFeedbackBanner = true; uiOpacity = 1.0 }
+            pendingFeedbackHideWorkItem?.cancel()
+            let work = DispatchWorkItem {
+                withAnimation(.easeInOut(duration: 0.3)) { showFeedbackBanner = false }
+            }
+            pendingFeedbackHideWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
         }
     }
     
@@ -133,32 +158,63 @@ struct ContentView: View {
     
     /// UI controls and feedback overlay layer
     private var uiOverlayLayer: some View {
-        VStack(spacing: 0) {
-            // Top feedback banner
-            ZStack(alignment: .topTrailing) {
-                topFeedbackBanner
-                
-                // Settings button
-                Button(action: { isSettingsPresented = true }) {
-                    Image(systemName: "gearshape.fill")
-                        .foregroundColor(.white)
-                        .padding(10)
-                        .background(.black.opacity(0.4))
-                        .clipShape(Circle())
+        ZStack(alignment: .top) {
+            // Top-center distance dot
+            HStack { Spacer(); if shouldShowDistanceUI { distanceDot } ; Spacer() }
+                .padding(.top, 20)
+
+            // Bottom-left settings and bottom-right start/stop
+            VStack {
+                Spacer()
+                HStack {
+                    Button(action: { isSettingsPresented = true; restoreUIForSeconds(5) }) {
+                        Image(systemName: "gearshape.fill")
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                            .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
+                    }
+                    .padding(.leading, 16)
+                    .padding(.bottom, 16)
+                    
+                    Spacer()
+                    
+                    Button(action: {
+                        withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) { buttonScale = 0.95 }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            withAnimation(.spring(response: 0.2, dampingFraction: 0.6)) { buttonScale = 1.0 }
+                        }
+                        workoutViewModel.toggleWorkout(); restoreUIForSeconds(5)
+                    }) {
+                        Image(systemName: workoutViewModel.isActive ? "pause.fill" : "play.fill")
+                            .foregroundColor(.white)
+                            .frame(width: 50, height: 50)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Circle())
+                            .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
+                    }
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 16)
                 }
-                .padding(.trailing, 24)
-                .padding(.top, 24)
             }
             
-            Spacer()
+            // Feedback banner (only when active), slide in/out
+            if !workoutViewModel.feedbackMessage.isEmpty && !workoutViewModel.isMinimalUIMode {
+                compactTopFeedbackBanner
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             
-            // Loading indicator, large rep display, or bottom controls
-            if workoutViewModel.isLoading {
-                loadingIndicator
-            } else if workoutViewModel.isActive {
-                largeRepDisplay
-            } else {
-                bottomControlsCard
+            // Bottom centered compact rep overlay
+        VStack {
+                Spacer()
+                if !workoutViewModel.isLoading && (workoutViewModel.isMinimalUIMode || true) {
+                    bottomRepOverlay
+                        .padding(.bottom, 50)
+                } else {
+                    loadingIndicator
+                        .padding(.bottom, 50)
+                }
             }
         }
         .opacity(isUIVisible ? 1.0 : 0.0)
@@ -167,42 +223,70 @@ struct ContentView: View {
                 isSpeechEnabled: $workoutViewModel.isSpeechEnabled,
                 isSkeletonOverlayEnabled: $workoutViewModel.isSkeletonOverlayEnabled,
                 isHapticsEnabled: $workoutViewModel.isHapticsEnabled,
-                isSoundEnabled: $workoutViewModel.isSoundEnabled
+                isSoundEnabled: $workoutViewModel.isSoundEnabled,
+                isMinimalUIMode: $workoutViewModel.isMinimalUIMode
             )
         }
     }
     
     // MARK: - UI Components
     
-    /// Top banner showing real-time feedback
-    private var topFeedbackBanner: some View {
-        VStack(spacing: 12) {
-            // Large form feedback message
-            Text(workoutViewModel.feedbackMessage)
-                .font(.system(size: 32, weight: .bold))
-                .foregroundColor(.white)
-                .multilineTextAlignment(.center)
-                .lineLimit(3)
-                .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 2)
+    /// Compact top banner showing feedback (single line with marquee if needed)
+    private var compactTopFeedbackBanner: some View {
+        VStack(spacing: 8) {
+            // Single-line marquee-style scrolling if text is long
+            GeometryReader { geo in
+                let text = workoutViewModel.feedbackMessage
+                ZStack(alignment: .leading) {
+                    Text(text)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .shadow(color: .black.opacity(0.9), radius: 2, x: 0, y: 1)
+                        .frame(maxWidth: geo.size.width, alignment: .leading)
+                        .overlay(
+                            LinearGradient(gradient: Gradient(colors: [.black.opacity(0.0), .black.opacity(0.6)]), startPoint: .trailing, endPoint: .leading)
+                                .frame(width: 30)
+                                .allowsHitTesting(false), alignment: .trailing
+                        )
+                }
+            }
+            .frame(height: 22)
             
-            // Form quality indicator
-            if workoutViewModel.isPoseTracked {
+            // Form quality indicator kept compact
+            if workoutViewModel.isPoseTracked && !workoutViewModel.isMinimalUIMode {
                 formQualityIndicator
             }
         }
-        .padding(.horizontal, 30)
-        .padding(.vertical, 24)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
         .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(.black.opacity(0.7))
+            RoundedRectangle(cornerRadius: 16)
+                .fill(.ultraThinMaterial)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(Color.white.opacity(0.3), lineWidth: 2)
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
                 )
         )
         .padding(.horizontal, 20)
-        .padding(.top, 70) // Account for status bar
-        .shadow(color: .black.opacity(0.5), radius: 10, x: 0, y: 5)
+        .padding(.top, 60)
+        .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 3)
+    }
+
+    // MARK: - UI Fade Helpers
+    private func scheduleUIFade(after seconds: TimeInterval) {
+        uiFadeTimer?.invalidate()
+        uiFadeTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
+            withAnimation(.easeInOut(duration: 0.5)) { uiOpacity = 0.2 }
+        }
+    }
+    
+    private func restoreUIForSeconds(_ seconds: TimeInterval) {
+        withAnimation(.easeInOut(duration: 0.2)) { uiOpacity = 1.0 }
+        uiRestoreTimer?.invalidate()
+        uiRestoreTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in
+            withAnimation(.easeInOut(duration: 0.5)) { uiOpacity = 0.2 }
+        }
     }
     
     /// Form quality progress indicator
@@ -226,69 +310,12 @@ struct ContentView: View {
     
     /// Large rep counter display for active workouts
     private var largeRepDisplay: some View {
-        VStack(spacing: 16) {
-            // Massive rep count number
-            Text("\(workoutViewModel.repCount)")
-                .font(.system(size: 72, weight: .heavy))
-                .foregroundColor(.white)
-                .shadow(color: .black.opacity(0.8), radius: 3, x: 0, y: 3)
-            
-            // "Reps" label
-            Text("REPS")
-                .font(.system(size: 24, weight: .bold))
-                .foregroundColor(.white.opacity(0.9))
-                .tracking(2)
-                .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 2)
-            
-            // Current squat state indicator
-            Text(workoutViewModel.currentSquatState.rawValue.uppercased())
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundColor(stateColor)
-                .tracking(1)
-                .shadow(color: .black.opacity(0.8), radius: 2, x: 0, y: 2)
-            
-            // Large stop button
-            largeStopButton
-        }
-        .padding(.horizontal, 40)
-        .padding(.vertical, 30)
-        .background(
-            RoundedRectangle(cornerRadius: 25)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 25)
-                        .stroke(Color.white.opacity(0.3), lineWidth: 2)
-                )
-        )
-        .padding(.horizontal, 20)
-        .padding(.bottom, 50)
-        .shadow(color: .black.opacity(0.3), radius: 15, x: 0, y: 8)
+        EmptyView()
     }
     
     /// Bottom card with stats and controls
     private var bottomControlsCard: some View {
-        VStack(spacing: 20) {
-            // Workout statistics
-            workoutStatsView
-            
-            // Main control button
-            mainControlButton
-            
-            // Secondary actions
-            secondaryActionsView
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 20)
-        .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 20)
-                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
-                )
-        )
-        .padding(.horizontal, 20)
-        .padding(.bottom, 40) // Account for home indicator
+        EmptyView()
     }
     
     /// Workout statistics display
@@ -401,56 +428,37 @@ struct ContentView: View {
         .scaleEffect(buttonScale)
         .disabled(!workoutViewModel.isCameraAuthorized)
     }
+
+    /// Bottom-centered compact rep label (50pt from bottom)
+    private var bottomRepOverlay: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "figure.strengthtraining.traditional")
+                .foregroundColor(.white)
+                .font(.system(size: 18, weight: .bold))
+                .shadow(color: .black.opacity(0.5), radius: 2, x: 0, y: 1)
+            
+            Text("\(workoutViewModel.repCount) REPS")
+                .font(.system(size: 28, weight: .heavy))
+                .foregroundColor(.white)
+                .shadow(color: .black.opacity(0.7), radius: 2, x: 0, y: 1)
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 60)
+        .background(
+            RoundedRectangle(cornerRadius: 30, style: .continuous)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 30, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
+        )
+        .shadow(color: .black.opacity(0.25), radius: 6, x: 0, y: 3)
+        .frame(maxWidth: .infinity, alignment: .center)
+    }
     
     /// Secondary action buttons
     private var secondaryActionsView: some View {
-        HStack(spacing: 16) {
-            // Reset button
-            Button(action: {
-                workoutViewModel.resetWorkout()
-            }) {
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.clockwise")
-                    Text("Reset")
-                }
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.white.opacity(0.2))
-                )
-            }
-            .disabled(!workoutViewModel.isActive && workoutViewModel.repCount == 0)
-            
-            // Sound toggle button
-            Button(action: {
-                workoutViewModel.toggleSoundFeedback()
-            }) {
-                HStack(spacing: 8) {
-                    Image(systemName: workoutViewModel.isSoundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    Text("Sound")
-                }
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(workoutViewModel.isSoundEnabled ? Color.blue.opacity(0.3) : Color.white.opacity(0.2))
-                )
-            }
-            
-            Spacer()
-            
-            // Rep progress indicator
-            if workoutViewModel.isActive {
-                repProgressIndicator
-            }
-        }
+        EmptyView()
     }
     
     /// Rep progress circular indicator
@@ -607,21 +615,7 @@ struct ContentView: View {
             }
             
             // Distance indicator icon (top-left) - only during initial guidance window
-            if shouldShowDistanceUI {
-                HStack {
-                    let iconName: String = workoutViewModel.isOptimalDistance ? "checkmark.seal.fill" : (workoutViewModel.isTooClose ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
-                    let iconColor: Color = workoutViewModel.isOptimalDistance ? .green : (workoutViewModel.isTooClose ? .red : .orange)
-                    Image(systemName: iconName)
-                        .foregroundColor(iconColor)
-                        .padding(10)
-                        .background(.black.opacity(0.35))
-                        .clipShape(Circle())
-                        .padding(.leading, 20)
-                        .padding(.top, 20)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
+            // Remove old icon in favor of top-center dot
         }
         .allowsHitTesting(false)
     }
@@ -672,6 +666,26 @@ struct ContentView: View {
         // Show for first 10 seconds; hide once optimal has been achieved and the 10s window passed
         let withinWindow = Date().timeIntervalSince(start) < 10
         return withinWindow || (!distanceUIHiddenAfterOptimal && !workoutViewModel.isOptimalDistance)
+    }
+
+    /// Distance dot in top-center: 🟢 optimal, 🟡 adjust, 🔴 too close
+    private var distanceDot: some View {
+        let symbol: String
+        let color: Color
+        if workoutViewModel.isOptimalDistance {
+            symbol = "circle.fill"; color = .green
+        } else if workoutViewModel.isTooClose {
+            symbol = "circle.fill"; color = .red
+        } else {
+            symbol = "circle.fill"; color = .yellow
+        }
+        return Image(systemName: symbol)
+            .foregroundColor(color)
+            .frame(width: 14, height: 14)
+            .padding(8)
+            .background(.black.opacity(0.35))
+            .clipShape(Capsule())
+            .shadow(color: .black.opacity(0.4), radius: 3, x: 0, y: 1)
     }
     
     // MARK: - Helper Methods

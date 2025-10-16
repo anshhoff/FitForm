@@ -89,6 +89,7 @@ class WorkoutViewModel: ObservableObject {
     /// Distance guidance flags
     @Published var isTooClose: Bool = false
     @Published var isOptimalDistance: Bool = false
+    @Published var isTooFar: Bool = false
     
     /// Loading state while camera initializes
     /// Shows loading indicator during camera setup
@@ -125,6 +126,9 @@ class WorkoutViewModel: ObservableObject {
     
     /// Skeleton overlay visibility
     @Published var isSkeletonOverlayEnabled: Bool = true
+    
+    /// Minimal UI mode flag (shows only essential elements)
+    @Published var isMinimalUIMode: Bool = false
     
     /// Speech anti-spam properties
     private var lastSpeechTime: Date = Date.distantPast
@@ -501,6 +505,7 @@ class WorkoutViewModel: ObservableObject {
             
             self.isTooClose = tooClose
             self.isOptimalDistance = optimal
+            self.isTooFar = (distanceState == .tooFar)
             
             if tooClose {
                 // Overlay message
@@ -534,6 +539,8 @@ class WorkoutViewModel: ObservableObject {
                 // Reset distance speaking gate when optimal is reached
                 self.distanceTooCloseStartTime = nil
                 self.hasSpokenTooClose = false
+                // Clear too far flag when optimal
+                self.isTooFar = false
             }
             
             // Debounce UI flicker with a short timer if needed in the future
