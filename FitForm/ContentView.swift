@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var uiFadeTimer: Timer? = nil
     @State private var uiRestoreTimer: Timer? = nil
     @State private var distanceOptimalStartTime: Date? = nil
+    @State private var showResetFeedback: Bool = false
     
     /// Visual alert overlay state
     @State private var showPostureAlert = false
@@ -45,7 +46,26 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             // Layer 1: Camera Preview (Background)
-            cameraPreviewLayer
+            Group {
+                if workoutViewModel.isCameraRunning {
+                    cameraPreviewLayer
+                        .transition(.opacity)
+                } else if workoutViewModel.isCameraAuthorized == false {
+                    cameraPermissionView
+                } else if workoutViewModel.isLoading {
+                    loadingIndicator
+                } else {
+                    // Placeholder while camera recovers
+                    ZStack {
+                        Rectangle().fill(Color.black.opacity(0.6))
+                        VStack(spacing: 16) {
+                            Image(systemName: "camera.fill").font(.system(size: 48)).foregroundColor(.white.opacity(0.9))
+                            Text("Starting Camera...")
+                                .foregroundColor(.white)
+                        }
+                    }
+                }
+            }
             
             // Layer 2: Pose Skeleton Overlay (Middle)
             if workoutViewModel.isSkeletonOverlayEnabled {
@@ -68,11 +88,20 @@ struct ContentView: View {
             visualIndicatorsOverlay
             
             // Compact distance bar at the very top
-            if shouldShowDistanceUI {
-                distanceBarView
-                    .padding(.top, 8)
+//            if shouldShowDistanceUI {
+//                distanceBarView
+//                    .padding(.top, 8)
+//                    .transition(.opacity)
+//            }
+            
+            // Camera error UI
+            if let camErr = workoutViewModel.cameraError {
+                cameraErrorView(message: camErr)
                     .transition(.opacity)
             }
+            
+            // Small camera status indicator (corner)
+            cameraStatusIndicator
         }
         .ignoresSafeArea(.all, edges: .all)
         .onAppear {
@@ -199,9 +228,57 @@ struct ContentView: View {
                 }
             }
             
+            // Reset button - bottom-right corner
+            if workoutViewModel.isActive {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Button(action: {
+                            // Haptic feedback
+                            let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+                            impactFeedback.impactOccurred()
+                            
+                            // Reset rep count
+                            workoutViewModel.resetRepCount()
+                            
+                            // Show brief feedback
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                showResetFeedback = true
+                            }
+                            
+                            // Hide feedback after 2 seconds
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    showResetFeedback = false
+                                }
+                            }
+                        }) {
+                            Image(systemName: "arrow.counterclockwise")
+                                .foregroundColor(.white)
+                                .font(.system(size: 18, weight: .medium))
+                                .frame(width: 40, height: 40)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Circle())
+                                .shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 1)
+                        }
+                        .accessibilityLabel("Reset rep count button")
+                        .padding(.trailing, 20)
+                        .padding(.bottom, 20)
+                    }
+                }
+                .transition(.opacity)
+            }
+            
             // Feedback banner (only when active), slide in/out
             if !workoutViewModel.feedbackMessage.isEmpty && !workoutViewModel.isMinimalUIMode {
                 compactTopFeedbackBanner
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+            
+            // Reset feedback banner
+            if showResetFeedback {
+                resetFeedbackBanner
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             
@@ -271,6 +348,32 @@ struct ContentView: View {
         .padding(.horizontal, 20)
         .padding(.top, 60)
         .shadow(color: .black.opacity(0.4), radius: 6, x: 0, y: 3)
+    }
+    
+    /// Reset feedback banner showing "Rep count reset" message
+    private var resetFeedbackBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.counterclockwise")
+                .foregroundColor(.white)
+                .font(.system(size: 16, weight: .medium))
+            
+            Text("Rep count reset")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        )
+        .padding(.horizontal, 20)
+        .padding(.top, 60)
+        .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 2)
     }
 
     // MARK: - UI Fade Helpers
@@ -532,6 +635,62 @@ struct ContentView: View {
         )
     }
     
+    /// Camera error view with retry and settings
+    private func cameraErrorView(message: String) -> some View {
+        VStack(spacing: 16) {
+            Image(systemName: "camera.on.rectangle")
+                .font(.system(size: 52))
+                .foregroundColor(.white.opacity(0.9))
+            Text("Camera Not Available")
+                .font(.title3).bold()
+                .foregroundColor(.white)
+            Text(message)
+                .font(.footnote)
+                .foregroundColor(.white.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            HStack(spacing: 12) {
+                Button(action: { workoutViewModel.restartCamera() }) {
+                    Text("Retry").bold()
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(.white))
+                }
+                Button(action: {
+                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                }) {
+                    Text("Open Settings").bold()
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity).frame(height: 44)
+                        .background(RoundedRectangle(cornerRadius: 12).stroke(.white, lineWidth: 1))
+                }
+            }
+            .padding(.horizontal, 24)
+        }
+        .padding(.vertical, 30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black.opacity(0.5))
+    }
+    
+    /// Small camera status indicator (corner): green working, red error, gray loading
+    private var cameraStatusIndicator: some View {
+        let color: Color = workoutViewModel.cameraError != nil ? .red : (workoutViewModel.isCameraRunning ? .green : .gray)
+        return HStack {
+            Spacer()
+            VStack {
+                Circle().fill(color).frame(width: 10, height: 10)
+                    .overlay(Image(systemName: "camera.fill").font(.caption2).foregroundColor(.white))
+                    .padding(8)
+                    .background(.black.opacity(0.35))
+                    .clipShape(Capsule())
+                Spacer()
+            }
+            .padding(.trailing, 8)
+            .padding(.top, 8)
+        }
+        .allowsHitTesting(false)
+    }
+    
     /// Loading indicator while camera initializes
     private var loadingIndicator: some View {
         VStack(spacing: 20) {
@@ -621,21 +780,21 @@ struct ContentView: View {
     }
 
     /// Compact distance bar view (Too Close | Optimal | Too Far)
-    private var distanceBarView: some View {
-        HStack(spacing: 6) {
-            distanceSegment(title: "Too Close", color: .red, active: workoutViewModel.isTooClose)
-            distanceSegment(title: "Optimal", color: .green, active: workoutViewModel.isOptimalDistance)
-            distanceSegment(title: "Too Far", color: .orange, active: (!workoutViewModel.isTooClose && !workoutViewModel.isOptimalDistance))
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color.black.opacity(0.35))
-        )
-        .padding(.horizontal, 20)
-        .frame(maxWidth: .infinity, alignment: .top)
-    }
+//    private var distanceBarView: some View {
+//        HStack(spacing: 6) {
+//            distanceSegment(title: "Too Close", color: .red, active: workoutViewModel.isTooClose)
+//            distanceSegment(title: "Optimal", color: .green, active: workoutViewModel.isOptimalDistance)
+//            distanceSegment(title: "Too Far", color: .orange, active: (!workoutViewModel.isTooClose && !workoutViewModel.isOptimalDistance))
+//        }
+//        .padding(.horizontal, 16)
+//        .padding(.vertical, 8)
+//        .background(
+//            RoundedRectangle(cornerRadius: 14)
+//                .fill(Color.black.opacity(0.35))
+//        )
+//        .padding(.horizontal, 20)
+//        .frame(maxWidth: .infinity, alignment: .top)
+//    }
     
     private func distanceSegment(title: String, color: Color, active: Bool) -> some View {
         HStack(spacing: 6) {

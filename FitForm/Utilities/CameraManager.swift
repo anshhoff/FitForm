@@ -32,7 +32,7 @@ class CameraManager: NSObject, ObservableObject {
     // MARK: - Private Properties
     
     /// Main capture session (kept private; expose via read-only accessor below)
-    private let captureSession = AVCaptureSession()
+    private var captureSession = AVCaptureSession()
     
     /// Front camera device
     private var frontCamera: AVCaptureDevice?
@@ -49,6 +49,15 @@ class CameraManager: NSObject, ObservableObject {
     /// Session queue for configuration
     private let sessionQueue = DispatchQueue(label: "com.fitform.camera.session", qos: .userInitiated)
     
+    /// Timer to periodically check if frames are being received
+    private var noFrameTimer: Timer?
+    
+    /// Timestamp of the last frame received (for diagnostics)
+    private var lastFrameReceivedTime: Date = Date.distantPast
+    
+    /// Timestamp of the last time we logged frame diagnostics
+    private var lastFrameLogTime: Date = Date.distantPast
+    
     // MARK: - Public Read-only Accessors
     
     /// Read-only access to the capture session for preview layers
@@ -59,16 +68,39 @@ class CameraManager: NSObject, ObservableObject {
     override init() {
         super.init()
         setupCamera()
+        registerLifecycleObservers()
     }
     
     // MARK: - Public Methods
     
     /// Requests camera permission and starts capture session
     func start() {
+        print("Camera: Starting session...")
         Task {
             await requestCameraPermission()
-            if isAuthorized {
-                await startCaptureSession()
+            guard isAuthorized else {
+                print("Camera: Error - Permission denied or restricted")
+                return
+            }
+            sessionQueue.async { [weak self] in
+                guard let self = self else { return }
+                if self.captureSession.isRunning { self.captureSession.stopRunning() }
+                self.removeAllInputsOutputs()
+                self.configureCaptureSession()
+                self.captureSession.startRunning()
+                DispatchQueue.main.async {
+                    self.isRunning = self.captureSession.isRunning
+                    if self.isRunning {
+                        print("Camera: Session started")
+                        self.errorMessage = nil
+                        // Reset diagnostics timestamps and start monitor
+                        self.lastFrameReceivedTime = Date()
+                        self.lastFrameLogTime = Date.distantPast
+                        self.startNoFrameMonitor()
+                    } else {
+                        print("Camera: Error - Failed to start running")
+                    }
+                }
             }
         }
     }
@@ -77,15 +109,26 @@ class CameraManager: NSObject, ObservableObject {
     func stop() {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
-            
             if self.captureSession.isRunning {
                 self.captureSession.stopRunning()
-                
-                DispatchQueue.main.async {
-                    self.isRunning = false
-                    self.currentFrame = nil
-                }
             }
+            self.removeAllInputsOutputs()
+            DispatchQueue.main.async {
+                self.isRunning = false
+                self.currentFrame = nil
+                // Stop monitor timer
+                self.noFrameTimer?.invalidate()
+                self.noFrameTimer = nil
+            }
+        }
+    }
+
+    /// Restarts the camera session safely
+    func restart() {
+        print("Camera: Restarting session...")
+        stop()
+        sessionQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.start()
         }
     }
     
@@ -109,6 +152,7 @@ class CameraManager: NSObject, ObservableObject {
         } else {
             captureSession.sessionPreset = .medium
         }
+        print("Camera: Configuring session with preset: \(captureSession.sessionPreset.rawValue)")
         
         // Setup camera input
         guard setupCameraInput() else {
@@ -130,6 +174,9 @@ class CameraManager: NSObject, ObservableObject {
         
         // Commit configuration
         captureSession.commitConfiguration()
+        print("Camera: Session configured successfully")
+        dumpDiagnostics()
+        print("Camera: Session configured successfully")
     }
     
     /// Sets up front camera input
@@ -137,6 +184,7 @@ class CameraManager: NSObject, ObservableObject {
     private func setupCameraInput() -> Bool {
         // Get front camera device
         guard let frontCamera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front) else {
+            print("Camera: Error - Front camera not available")
             DispatchQueue.main.async {
                 self.errorMessage = "Front camera not available"
             }
@@ -153,14 +201,17 @@ class CameraManager: NSObject, ObservableObject {
             if captureSession.canAddInput(cameraInput) {
                 captureSession.addInput(cameraInput)
                 self.cameraInput = cameraInput
+                print("Camera: Input added (position: \(frontCamera.position == .front ? "front" : "back"))")
                 return true
             } else {
+                print("Camera: Error - Cannot add camera input to session")
                 DispatchQueue.main.async {
                     self.errorMessage = "Cannot add camera input to session"
                 }
                 return false
             }
         } catch {
+            print("Camera: Error - Failed to create camera input: \(error.localizedDescription)")
             DispatchQueue.main.async {
                 self.errorMessage = "Failed to create camera input: \(error.localizedDescription)"
             }
@@ -177,6 +228,7 @@ class CameraManager: NSObject, ObservableObject {
         videoOutput.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
+        print("Camera: Video output settings -> \(videoOutput.videoSettings)")
         
         // Set delegate for frame processing
         videoOutput.setSampleBufferDelegate(self, queue: videoQueue)
@@ -188,6 +240,7 @@ class CameraManager: NSObject, ObservableObject {
         if captureSession.canAddOutput(videoOutput) {
             captureSession.addOutput(videoOutput)
             self.videoOutput = videoOutput
+            print("Camera: Video output added")
             
             // Configure video connection
             if let connection = videoOutput.connection(with: .video) {
@@ -204,6 +257,7 @@ class CameraManager: NSObject, ObservableObject {
             
             return true
         } else {
+            print("Camera: Error - Cannot add video output to session")
             DispatchQueue.main.async {
                 self.errorMessage = "Cannot add video output to session"
             }
@@ -282,6 +336,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = convertSampleBufferToPixelBuffer(sampleBuffer) else {
             return
         }
+        // Frame diagnostics (print every ~2 seconds)
+        let now = Date()
+        if now.timeIntervalSince(lastFrameLogTime) >= 2.0 {
+            print("Camera: Frame received | isRunning=\(captureSession.isRunning) inputs=\(captureSession.inputs.count) outputs=\(captureSession.outputs.count)")
+            lastFrameLogTime = now
+        }
+        lastFrameReceivedTime = now
         
         // Update current frame on main queue for SwiftUI
         DispatchQueue.main.async { [weak self] in
@@ -333,3 +394,57 @@ extension CameraManager {
         }
     }
 }
+
+// MARK: - Lifecycle Handling
+
+extension CameraManager {
+    private func registerLifecycleObservers() {
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillEnterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidEnterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillTerminate), name: UIApplication.willTerminateNotification, object: nil)
+    }
+    
+    @objc private func appWillEnterForeground() {
+        print("Camera: App will enter foreground - restarting session")
+        restart()
+    }
+    @objc private func appDidEnterBackground() {
+        print("Camera: App did enter background - stopping session")
+        stop()
+    }
+    @objc private func appWillTerminate() {
+        print("Camera: App will terminate - cleaning up session")
+        stop()
+        NotificationCenter.default.removeObserver(self)
+    }
+    
+    /// Removes all inputs and outputs from the session
+    private func removeAllInputsOutputs() {
+        for input in captureSession.inputs {
+            captureSession.removeInput(input)
+        }
+        for output in captureSession.outputs {
+            captureSession.removeOutput(output)
+        }
+    }
+    
+    private func startNoFrameMonitor() {
+        noFrameTimer?.invalidate()
+        noFrameTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            guard let self = self else { return }
+            if Date().timeIntervalSince(self.lastFrameReceivedTime) >= 5.0 {
+                print("Camera: WARNING - No frames received in the last 5 seconds")
+            }
+        }
+    }
+    
+    fileprivate func dumpDiagnostics() {
+        print("Camera: Diagnostics => isRunning=\(captureSession.isRunning), inputs=\(captureSession.inputs.count), outputs=\(captureSession.outputs.count)")
+        print("Camera: Session preset=\(captureSession.sessionPreset.rawValue)")
+        if let device = frontCamera {
+            print("Camera: Device position=\(device.position == .front ? "front" : "back")")
+            print("Camera: Device format=\(device.activeFormat) | FPS=\(device.activeVideoMaxFrameDuration)")
+        }
+    }
+}
+

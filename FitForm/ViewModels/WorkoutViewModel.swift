@@ -86,6 +86,9 @@ class WorkoutViewModel: ObservableObject {
     /// Shows any issues with camera, pose detection, etc.
     @Published var errorMessage: String? = nil
     
+    /// Camera-specific error for UI display
+    @Published var cameraError: String? = nil
+    
     /// Distance guidance flags
     @Published var isTooClose: Bool = false
     @Published var isOptimalDistance: Bool = false
@@ -142,6 +145,13 @@ class WorkoutViewModel: ObservableObject {
     private var hasSpokenTooClose: Bool = false
     private var distanceCheckDebounce: Timer? = nil
     
+    /// Lifecycle state
+    private var wasActiveBeforeBackground: Bool = false
+    
+    /// Camera retry state
+    private var cameraRetryCount: Int = 0
+    private let maxCameraRetries: Int = 3
+    
     // MARK: - Initialization
     
     init() {
@@ -149,6 +159,7 @@ class WorkoutViewModel: ObservableObject {
         setupCameraObservation()
         setupHapticFeedback()
         setupSpeechManagement()
+        registerLifecycleObservers()
     }
     
     // MARK: - Public Methods
@@ -197,7 +208,7 @@ class WorkoutViewModel: ObservableObject {
         processingTimer = nil
         
         // Reset UI state
-        jointPoints.removeAll()
+        jointPoints.removeAll() // Clear joints when camera stops
         feedbackMessage = "Workout stopped"
         currentKneeAngle = nil
         errorMessage = nil
@@ -232,6 +243,11 @@ class WorkoutViewModel: ObservableObject {
         }
     }
     
+    /// Public helper to restart camera from UI
+    func restartCamera() {
+        cameraManager.restart()
+    }
+    
     /// Toggles sound feedback on/off
     /// Allows user to control audio feedback
     func toggleSoundFeedback() {
@@ -242,6 +258,14 @@ class WorkoutViewModel: ObservableObject {
     /// Allows user to control speech feedback
     func toggleSpeechFeedback() {
         isSpeechEnabled.toggle()
+    }
+    
+    /// Resets only the rep count while keeping workout active
+    /// Allows user to reset counter without stopping the workout session
+    func resetRepCount() {
+        repCounter.reset()
+        // Reset speech tracking for rep count
+        lastRepCount = 0
     }
     
     // MARK: - Setup Methods
@@ -316,6 +340,51 @@ class WorkoutViewModel: ObservableObject {
                 self?.speechManager.setSpeechEnabled(enabled)
             }
             .store(in: &cancellables)
+    }
+
+    /// Registers app lifecycle observers for camera and pipeline control
+    private func registerLifecycleObservers() {
+        NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.wasActiveBeforeBackground = self.isActive
+            self.cameraManager.stop()
+            self.cameraRetryCount = 0
+            self.jointPoints.removeAll()
+            self.currentKneeAngle = nil
+            self.feedbackMessage = ""
+            self.speechManager.setSpeechEnabled(false)
+        }
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self = self else { return }
+            self.speechManager.setSpeechEnabled(self.isSpeechEnabled)
+            self.retryStartCamera()
+        }
+    }
+    
+    /// Attempts to start camera with retry logic
+    private func retryStartCamera() {
+        func attempt() {
+            cameraManager.start()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self = self else { return }
+                if !self.cameraManager.isRunning {
+                    if self.cameraRetryCount < self.maxCameraRetries {
+                        self.cameraRetryCount += 1
+                        print("Camera retry \(self.cameraRetryCount)/\(self.maxCameraRetries)")
+                        attempt()
+                    } else {
+                        self.cameraError = "Unable to start camera. Please try again."
+                    }
+                } else {
+                    self.cameraError = nil
+                    if self.wasActiveBeforeBackground {
+                        self.isActive = true
+                    }
+                }
+            }
+        }
+        cameraRetryCount = 0
+        attempt()
     }
     
     /// Handles speech announcements for posture feedback
@@ -575,10 +644,10 @@ class WorkoutViewModel: ObservableObject {
                 self.feedbackMessage = "Move closer to camera"
             case .invalidPixelBuffer:
                 self.feedbackMessage = "Camera error - please restart"
-                self.errorMessage = "Camera processing error"
+                self.cameraError = "Camera processing error"
             case .visionRequestFailed:
                 self.feedbackMessage = "Pose detection error"
-                self.errorMessage = error.localizedDescription
+                self.cameraError = error.localizedDescription
             }
             
             // Reset form metrics
